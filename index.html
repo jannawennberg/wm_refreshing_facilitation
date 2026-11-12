@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Instructed Refreshing Experiment</title>
+
+    <script src="https://unpkg.com/jspsych@7.3.4"></script>
+    <link href="https://unpkg.com/jspsych@7.3.4/css/jspsych.css" rel="stylesheet" type="text/css">
+    <script src="https://unpkg.com/@jspsych-contrib/plugin-pipe"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-fullscreen@1.2.1"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-instructions@1.1.4"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response@1.2.0"></script>
+
+    <script src="jspsych_lib/instructed_refreshing.js"></script>
+    <script src="jspsych_lib/schurgin_colors.js"></script>
+
+    <style>
+        body { font-family: Georgia, serif; }
+        #jspsych-content { background: #f4f4f4; max-width: 900px; }
+        .block-header { font-size: 20px; font-weight: bold; margin-bottom: 10px; }
+    </style>
+</head>
+<body></body>
+
+<script>
+
+/* ======================================================================
+   CONFIG — edit these before running
+   ====================================================================== */
+const CONFIG = {
+    // Data saving (DataPipe) and SONA credit. Fill in for this new study.
+    DATAPIPE_EXPERIMENT_ID: 'REPLACE_WITH_DATAPIPE_ID',
+    SONA_EXPERIMENT_ID:     'REPLACE_WITH_SONA_EXPERIMENT_ID',
+    SONA_CREDIT_TOKEN:      'REPLACE_WITH_SONA_CREDIT_TOKEN',
+
+    DEBUG: true,                     // true = 1 short block per condition, no saving
+
+    // Design
+    conditions: ['no_wheel', 'full_wheel', 'local_wheel'],
+    set_size: 4,
+    n_cue_steps: 4,                   // refresh steps per trial
+    refresh_levels: [0, 1, 2],        // times the target is refreshed
+    max_cues_per_item: 2,
+    blocks_per_condition: 2,          // the condition order repeats: e.g. A B C A B C
+    trials_per_level_per_block: 12,   // 3 levels x 12 = 36 trials per block
+    practice_trials_per_level: 1,     // 3 practice trials per condition
+
+    // Trial parameters passed to the plugin (same in every condition)
+    trial_params: {
+        display_time: 1000,
+        pre_cue_delay: 500,
+        cue_duration: 1000,
+        inter_cue_interval: 250,
+        post_cue_delay: 500,
+        probe_max_rt: null,
+        hover_preview: true,
+    },
+    feedback_main: true,              // feedback on the final report in main blocks
+};
+
+if (CONFIG.DEBUG) {
+    CONFIG.blocks_per_condition = 1;
+    CONFIG.trials_per_level_per_block = 1;
+    CONFIG.practice_trials_per_level = 1;
+}
+
+/* ======================================================================
+   Setup
+   ====================================================================== */
+const url_params = new URLSearchParams(window.location.search);
+const raw_sona_id = url_params.get('participant');
+
+const jsPsych = initJsPsych({
+    show_progress_bar: true,
+    auto_update_progress_bar: false,
+    on_finish: () => {
+        if (raw_sona_id && !CONFIG.DEBUG) {
+            window.location = `https://ucsd.sona-systems.com/webstudy_credit.aspx?experiment_id=${CONFIG.SONA_EXPERIMENT_ID}&credit_token=${CONFIG.SONA_CREDIT_TOKEN}&survey_code=${raw_sona_id}`;
+        } else {
+            jsPsych.data.displayData('csv');
+        }
+    }
+});
+
+const unique_participant_id = jsPsych.randomization.randomID(10);
+const filename = `instructed_refreshing_v2_${unique_participant_id}.csv`;
+
+// Condition order: ?order=no_wheel,full_wheel,local_wheel (any permutation), else random
+let condition_order = (url_params.get('order') || '').split(',');
+const validOrder = condition_order.length === CONFIG.conditions.length &&
+    CONFIG.conditions.every(c => condition_order.includes(c));
+if (!validOrder) condition_order = irShuffle(CONFIG.conditions);
+
+const blockConditions = [];
+for (let b = 0; b < CONFIG.blocks_per_condition; b++) blockConditions.push(...condition_order);
+
+jsPsych.data.addProperties({ unique_participant_id, condition_order: condition_order.join(',') });
+if (raw_sona_id) jsPsych.data.addProperties({ raw_sona_id });
+
+const trials_per_block = CONFIG.refresh_levels.length * CONFIG.trials_per_level_per_block;
+const total_trials = trials_per_block * blockConditions.length;
+const n_practice = CONFIG.conditions.length * CONFIG.refresh_levels.length * CONFIG.practice_trials_per_level;
+
+// Rough duration estimate for the instructions
+const tp = CONFIG.trial_params;
+const sec_per_trial = (1000 + tp.display_time + tp.pre_cue_delay +
+    CONFIG.n_cue_steps * tp.cue_duration + (CONFIG.n_cue_steps - 1) * tp.inter_cue_interval +
+    tp.post_cue_delay + 1500 + (CONFIG.feedback_main ? 1500 : 100)) / 1000;
+const est_minutes = Math.ceil((total_trials + n_practice) * sec_per_trial / 60) + 5;
+
+let trial_count = 0;
+const update_progress_bar = () => { trial_count++; jsPsych.setProgressBar(trial_count / total_trials); };
+
+const timeline = [];
+
+/* ======================================================================
+   Instructions
+   ====================================================================== */
+timeline.push({
+    type: jsPsychFullscreen,
+    fullscreen_mode: true,
+    message: '<p>The experiment will switch to full screen mode when you press the button below.</p>',
+});
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: [
+        '<p>Welcome to this experiment!</p><p><strong>In order to participate, you must be on a laptop or desktop computer with a mouse or trackpad.</strong></p>',
+
+        `<p>In this experiment, you will briefly remember some colors. You will complete ${total_trials} trials, split across ${blockConditions.length} blocks, and you can take breaks between blocks. The experiment should take about ${est_minutes} minutes.</p>
+         <p><strong>Please do not participate if you do not have normal color vision.</strong></p>`,
+
+        `<p>On each trial you will see ${CONFIG.set_size} circles. They will briefly fill with ${CONFIG.set_size} different colors, and then the colors will disappear.</p>
+         <p><strong>Your job is to remember the exact color that was in each circle.</strong></p>`,
+
+        `<p>After the colors disappear, a series of arrows will appear in the middle of the screen, one at a time. Each arrow points to one of the circles. <strong>When an arrow points to a circle, think of the color that was in that circle.</strong> Bring it to mind as clearly and vividly as you can, and keep thinking of it until the arrow disappears.</p>
+         <p>The arrows do <strong>not</strong> tell you which circle will be tested. Any of the circles can be tested at the end, so keep remembering all of the colors.</p>`,
+
+        `<p>At the end of each trial, one circle will get a thick dark border, and a color wheel will appear around the circles. Move your mouse along the wheel to find the color that was in that circle. The circle will fill with the color you are pointing at. Click to lock in your answer.</p>
+         <p>The color wheel is rotated differently every time it appears, so you will need to look for the color rather than going to the same place on the screen.</p>`,
+
+        `<p>There are three types of blocks, which differ in what you see while the arrows are on the screen. We will explain each one before you start it.</p>`,
+    ],
+    show_clickable_nav: true,
+    button_label_next: 'Continue',
+});
+
+const thinkText = '<p>When an arrow points to a circle, <strong>think of the color that was in that circle</strong> until the arrow disappears.</p>';
+const conditionInstructions = {
+    no_wheel: `<div class="block-header">Arrows only</div>${thinkText}
+        <p>In this block, only the arrows will appear.</p>`,
+    full_wheel: `<div class="block-header">Arrows with a large color wheel</div>${thinkText}
+        <p>In this block, a large color wheel will also appear around all of the circles while each arrow is shown. You can't click it, and you don't need to do anything with it. Just think of the color.</p>`,
+    local_wheel: `<div class="block-header">Arrows with a small color wheel</div>${thinkText}
+        <p>In this block, a small color wheel will also appear around the circle the arrow points to. You can't click it, and you don't need to do anything with it. Just think of the color.</p>`,
+};
+
+/* ======================================================================
+   Trials
+   ====================================================================== */
+function trialNode(vars, isPractice) {
+    return {
+        timeline: [{
+            type: jsPsychInstructedRefreshing,
+            refresh_condition: jsPsych.timelineVariable('refresh_condition'),
+            block_label:       jsPsych.timelineVariable('block_label'),
+            is_practice:       jsPsych.timelineVariable('is_practice'),
+            target_index:      jsPsych.timelineVariable('target_index'),
+            cue_sequence:      jsPsych.timelineVariable('cue_sequence'),
+            set_size:          CONFIG.set_size,
+            feedback:          isPractice ? true : CONFIG.feedback_main,
+            ...CONFIG.trial_params,
+            on_finish:         isPractice ? undefined : update_progress_bar,
+        }],
+        timeline_variables: vars,
+        randomize_order: false,   // already shuffled in buildBlockTrials
+    };
+}
+
+/* ---------- Practice: a few trials of each condition, in block order ---------- */
+timeline.push({
+    type: jsPsychInstructions,
+    pages: ['<p>First, you will practice each type of block.</p>'],
+    show_clickable_nav: true,
+    button_label_next: 'Continue',
+});
+
+condition_order.forEach(cond => {
+    timeline.push({
+        type: jsPsychInstructions,
+        pages: ['<p><strong>Practice</strong></p>' + conditionInstructions[cond]],
+        show_clickable_nav: true,
+        button_label_next: 'Practice',
+    });
+    timeline.push(trialNode(
+        buildBlockTrials(cond, `practice_${cond}`, CONFIG, CONFIG.practice_trials_per_level, true), true));
+});
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: ['<p>You have finished the practice. The main task will now begin.</p>'],
+    show_clickable_nav: true,
+    button_label_next: 'Continue',
+});
+
+/* ---------- Main blocks ---------- */
+blockConditions.forEach((cond, b) => {
+    const blockLabel = `block${b + 1}_${cond}`;
+
+    timeline.push({
+        type: jsPsychInstructions,
+        pages: [`<p>Block ${b + 1} of ${blockConditions.length}</p>` + conditionInstructions[cond]],
+        show_clickable_nav: true,
+        button_label_next: 'Start block',
+    });
+
+    timeline.push(trialNode(
+        buildBlockTrials(cond, blockLabel, CONFIG, CONFIG.trials_per_level_per_block, false), false));
+
+    if (b < blockConditions.length - 1) {
+        timeline.push({
+            type: jsPsychHtmlButtonResponse,
+            stimulus: `<p>You've completed block ${b + 1} of ${blockConditions.length}.</p><p>Take a short break whenever you're ready.</p>`,
+            choices: ['Continue'],
+        });
+    }
+});
+
+/* ======================================================================
+   End
+   ====================================================================== */
+if (!CONFIG.DEBUG) {
+    timeline.push({
+        type: jsPsychPipe,
+        action: 'save',
+        experiment_id: CONFIG.DATAPIPE_EXPERIMENT_ID,
+        filename: filename,
+        data_string: () => jsPsych.data.get().csv(),
+    });
+}
+
+timeline.push({
+    type: jsPsychInstructions,
+    pages: ['<p>Thank you for participating!</p><p>Press "Back to SONA" to be taken back to SONA.</p><p><strong>You must do so in order to receive credit!</strong></p>'],
+    show_clickable_nav: true,
+    button_label_next: 'Back to SONA',
+});
+
+jsPsych.run(timeline);
+
+
+/* ======================================================================
+   HELPER FUNCTIONS (trial-list generation)
+   ====================================================================== */
+
+function irShuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+// Cue sequence of length nSteps in which the target is cued exactly k times.
+// Other steps go to non-targets (each at most maxPerItem times); no item is
+// cued on two consecutive steps.
+function makeCueSequence(setSize, nSteps, target, k, maxPerItem) {
+    if (k > nSteps || k > maxPerItem) throw new Error('Impossible refresh count: ' + k);
+    const others = [];
+    for (let i = 0; i < setSize; i++) if (i !== target) others.push(i);
+
+    for (let attempt = 0; attempt < 5000; attempt++) {
+        const pool = Array(k).fill(target);
+        const counts = {};
+        let guard = 0;
+        while (pool.length < nSteps && guard++ < 1000) {
+            const o = others[Math.floor(Math.random() * others.length)];
+            counts[o] = counts[o] || 0;
+            if (counts[o] < maxPerItem) { counts[o]++; pool.push(o); }
+        }
+        if (pool.length < nSteps) continue;
+        const seq = irShuffle(pool);
+        if (seq.every((v, i) => i === 0 || v !== seq[i - 1])) return seq;
+    }
+    throw new Error('Could not build a cue sequence (setSize=' + setSize + ', nSteps=' + nSteps + ', k=' + k + ')');
+}
+
+// One block: nPerLevel trials at each refresh level, random target, shuffled.
+function buildBlockTrials(condition, blockLabel, cfg, nPerLevel, isPractice) {
+    const vars = [];
+    for (const k of cfg.refresh_levels) {
+        for (let t = 0; t < nPerLevel; t++) {
+            const target = Math.floor(Math.random() * cfg.set_size);
+            vars.push({
+                refresh_condition: condition,
+                block_label: blockLabel,
+                is_practice: isPractice,
+                target_index: target,
+                cue_sequence: makeCueSequence(cfg.set_size, cfg.n_cue_steps, target, k, cfg.max_cues_per_item),
+            });
+        }
+    }
+    return irShuffle(vars);
+}
+
+</script>
+</html>
